@@ -1,0 +1,5 @@
+{
+  "domain": "somedomain.com",
+  "port": 53,
+  "host": "0.0.0.0"
+}
