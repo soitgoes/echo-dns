@@ -9,6 +9,7 @@ import struct
 import json
 import os
 import ipaddress
+import select
 from typing import Optional, Tuple
 
 
@@ -172,19 +173,49 @@ class SimpleDNSServer:
     
     def start(self):
         """Start the DNS server."""
+        sockets = []
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.socket.bind((self.config['host'], self.config['port']))
+            # Create IPv4 socket
+            ipv4_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            ipv4_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             
-            print(f"DNS Server started on {self.config['host']}:{self.config['port']}")
+            # Bind IPv4 socket
+            bind_host = self.config['host']
+            if bind_host == '0.0.0.0':
+                # For 0.0.0.0, also try to bind IPv6
+                try:
+                    ipv6_socket = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+                    ipv6_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    # Disable IPv4-mapped IPv6 addresses to force separate IPv4/IPv6 sockets
+                    ipv6_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                    ipv6_socket.bind(('::', self.config['port']))
+                    sockets.append(ipv6_socket)
+                    print(f"DNS Server IPv6 socket bound on [::]:{self.config['port']}")
+                except (OSError, AttributeError) as e:
+                    # IPv6 not available or not supported, continue with IPv4 only
+                    print(f"IPv6 not available, using IPv4 only: {e}")
+            
+            ipv4_socket.bind((bind_host, self.config['port']))
+            sockets.append(ipv4_socket)
+            self.socket = ipv4_socket  # Keep reference for cleanup
+            
+            print(f"DNS Server started on {bind_host}:{self.config['port']}")
             print(f"Domain: {self.config['domain']}")
             print("Waiting for queries...")
             
             while True:
                 try:
-                    data, client_addr = self.socket.recvfrom(512)
-                    response = self.handle_query(data, client_addr)
-                    self.socket.sendto(response, client_addr)
+                    # Use select to handle multiple sockets
+                    if len(sockets) > 1:
+                        readable, _, _ = select.select(sockets, [], [])
+                        for sock in readable:
+                            data, client_addr = sock.recvfrom(512)
+                            response = self.handle_query(data, client_addr)
+                            sock.sendto(response, client_addr)
+                    else:
+                        data, client_addr = ipv4_socket.recvfrom(512)
+                        response = self.handle_query(data, client_addr)
+                        ipv4_socket.sendto(response, client_addr)
                 except KeyboardInterrupt:
                     print("\nShutting down server...")
                     break
@@ -194,8 +225,9 @@ class SimpleDNSServer:
         except Exception as e:
             print(f"Error starting server: {e}")
         finally:
-            if self.socket:
-                self.socket.close()
+            for sock in sockets:
+                if sock:
+                    sock.close()
 
 
 def main():
