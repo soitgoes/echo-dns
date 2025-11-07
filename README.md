@@ -1,6 +1,6 @@
 # Echo DNS Server
 
-A simple DNS server that converts subdomain dashes to dots for IP addresses.
+A simple DNS server that converts subdomain dashes to dots for IP addresses.  DOES not resolve addresses
 
 ## How it works
 

@@ -83,7 +83,9 @@ class SimpleDNSServer:
         response = bytearray(query_data[:12])
         
         # Set response flags (QR=1, AA=1, RA=1)
-        response[2] = 0x81  # Response, Authoritative
+        # Byte 2: QR(1) + Opcode(0000) + AA(1) + TC(0) + RD(preserve from query)
+        # Byte 3: RA(1) + Z(000) + RCODE(0000)
+        response[2] = 0x84 | (query_data[2] & 0x01)  # Response, Authoritative, preserve RD
         response[3] = 0x80  # Recursion available
         
         # Set answer count to 1
@@ -125,7 +127,9 @@ class SimpleDNSServer:
         response = bytearray(query_data[:12])
         
         # Set response flags with error (QR=1, AA=1, RA=1, RCODE=3 for NXDOMAIN)
-        response[2] = 0x81  # Response, Authoritative
+        # Byte 2: QR(1) + Opcode(0000) + AA(1) + TC(0) + RD(preserve from query)
+        # Byte 3: RA(1) + Z(000) + RCODE(0011 for NXDOMAIN)
+        response[2] = 0x84 | (query_data[2] & 0x01)  # Response, Authoritative, preserve RD
         response[3] = 0x83  # Recursion available, NXDOMAIN
         
         # Set answer count to 0
