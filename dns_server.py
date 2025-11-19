@@ -95,8 +95,14 @@ class SimpleDNSServer:
         response[2] = 0x84 | (query_data[2] & 0x01)  # Response, Authoritative, preserve RD
         response[3] = 0x80  # Recursion available
         
-        # Set answer count to 1
-        response[6:8] = struct.pack('>H', 1)
+        # Header fields (RFC 1035):
+        # Bytes 4-5: QDCOUNT (question count) - preserve from query (should be 1)
+        # Bytes 6-7: ANCOUNT (answer count) - set to 1
+        # Bytes 8-9: NSCOUNT (authority count) - set to 0
+        # Bytes 10-11: ARCOUNT (additional count) - set to 0
+        response[6:8] = struct.pack('>H', 1)  # ANCOUNT = 1
+        response[8:10] = struct.pack('>H', 0)  # NSCOUNT = 0
+        response[10:12] = struct.pack('>H', 0)  # ARCOUNT = 0
         
         # Copy the question section
         question_start = 12
@@ -137,8 +143,10 @@ class SimpleDNSServer:
         response[2] = 0x84 | (query_data[2] & 0x01)  # Response, Authoritative, preserve RD
         response[3] = 0x80  # Recursion available
         
-        # Set answer count to 1
-        response[6:8] = struct.pack('>H', 1)
+        # Set header counts (RFC 1035)
+        response[6:8] = struct.pack('>H', 1)  # ANCOUNT = 1
+        response[8:10] = struct.pack('>H', 0)  # NSCOUNT = 0
+        response[10:12] = struct.pack('>H', 0)  # ARCOUNT = 0
         
         # Copy the question section
         question_start = 12
@@ -210,8 +218,10 @@ class SimpleDNSServer:
         response[2] = 0x84 | (query_data[2] & 0x01)  # Response, Authoritative, preserve RD
         response[3] = 0x80  # Recursion available
         
-        # Set answer count to 2 (two nameservers)
-        response[6:8] = struct.pack('>H', 2)
+        # Set header counts (RFC 1035)
+        response[6:8] = struct.pack('>H', 2)  # ANCOUNT = 2 (two nameservers)
+        response[8:10] = struct.pack('>H', 0)  # NSCOUNT = 0
+        response[10:12] = struct.pack('>H', 0)  # ARCOUNT = 0
         
         # Copy the question section
         question_start = 12
@@ -266,8 +276,10 @@ class SimpleDNSServer:
         response[2] = 0x84 | (query_data[2] & 0x01)  # Response, Authoritative, preserve RD
         response[3] = 0x83  # Recursion available, NXDOMAIN
         
-        # Set answer count to 0
-        response[6:8] = struct.pack('>H', 0)
+        # Set header counts (RFC 1035)
+        response[6:8] = struct.pack('>H', 0)  # ANCOUNT = 0
+        response[8:10] = struct.pack('>H', 0)  # NSCOUNT = 0
+        response[10:12] = struct.pack('>H', 0)  # ARCOUNT = 0
         
         # Copy the question section
         question_start = 12
