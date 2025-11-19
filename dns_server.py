@@ -24,7 +24,9 @@ class SimpleDNSServer:
         default_config = {
             "domain": "somedomain.com",
             "port": 53,
-            "host": "0.0.0.0"
+            "host": "0.0.0.0",
+            "nameservers": ["ns1.somedomain.com", "ns2.somedomain.com"],
+            "nameserver_ips": ["127.0.0.1", "127.0.0.1"]  # IP addresses for nameservers
         }
         
         if os.path.exists(self.config_file):
@@ -174,15 +176,15 @@ class SimpleDNSServer:
         soa_start = len(response)
         response.extend(b'\x00\x00')  # Placeholder for length
         
-        # MNAME (primary nameserver)
-        mname = "nsdynspark.911cellular.com"
+        # MNAME (primary nameserver) - use first nameserver from config
+        nameservers = self.config.get('nameservers', [f"ns1.{self.config['domain']}", f"ns2.{self.config['domain']}"])
+        mname = nameservers[0] if nameservers else f"ns1.{self.config['domain']}"
         for part in mname.split('.'):
             response.append(len(part))
             response.extend(part.encode('utf-8'))
         response.append(0)  # Null terminator
         
         # RNAME (responsible person email - format: hostmaster.domain)
-        # Convert dots to format: hostmaster.911cellular.com -> hostmaster\0911cellular\0com
         rname = f"hostmaster.{self.config['domain']}"
         for part in rname.split('.'):
             response.append(len(part))
@@ -218,8 +220,12 @@ class SimpleDNSServer:
         response[2] = 0x84 | (query_data[2] & 0x01)  # Response, Authoritative, preserve RD
         response[3] = 0x80  # Recursion available
         
+        # Get nameservers count
+        nameservers = self.config.get('nameservers', [f"ns1.{self.config['domain']}", f"ns2.{self.config['domain']}"])
+        ns_count = min(len(nameservers), 2)  # Limit to 2 nameservers
+        
         # Set header counts (RFC 1035)
-        response[6:8] = struct.pack('>H', 2)  # ANCOUNT = 2 (two nameservers)
+        response[6:8] = struct.pack('>H', ns_count)  # ANCOUNT = number of nameservers
         response[8:10] = struct.pack('>H', 0)  # NSCOUNT = 0
         response[10:12] = struct.pack('>H', 0)  # ARCOUNT = 0
         
@@ -232,37 +238,27 @@ class SimpleDNSServer:
         
         response.extend(query_data[question_start:question_end])
         
-        # Add first NS record
-        response.extend(b'\xc0\x0c')  # Name pointer
-        response.extend(b'\x00\x02')  # Type NS
-        response.extend(b'\x00\x01')  # Class IN
-        response.extend(b'\x00\x00\x0e\x10')  # TTL 3600
+        # Get nameservers from config
+        nameservers = self.config.get('nameservers', [f"ns1.{self.config['domain']}", f"ns2.{self.config['domain']}"])
+        if len(nameservers) < 2:
+            # Ensure we have at least 2 nameservers
+            nameservers = nameservers + [f"ns2.{self.config['domain']}"]
         
-        ns1_name = "nsdynspark.911cellular.com"
-        ns1_start = len(response)
-        response.extend(b'\x00\x00')  # Placeholder for length
-        for part in ns1_name.split('.'):
-            response.append(len(part))
-            response.extend(part.encode('utf-8'))
-        response.append(0)
-        ns1_length = len(response) - ns1_start - 2
-        response[ns1_start:ns1_start+2] = struct.pack('>H', ns1_length)
-        
-        # Add second NS record
-        response.extend(b'\xc0\x0c')  # Name pointer
-        response.extend(b'\x00\x02')  # Type NS
-        response.extend(b'\x00\x01')  # Class IN
-        response.extend(b'\x00\x00\x0e\x10')  # TTL 3600
-        
-        ns2_name = "nsdynspark2.911cellular.com"
-        ns2_start = len(response)
-        response.extend(b'\x00\x00')  # Placeholder for length
-        for part in ns2_name.split('.'):
-            response.append(len(part))
-            response.extend(part.encode('utf-8'))
-        response.append(0)
-        ns2_length = len(response) - ns2_start - 2
-        response[ns2_start:ns2_start+2] = struct.pack('>H', ns2_length)
+        # Add NS records for each nameserver
+        for ns_name in nameservers[:2]:  # Limit to 2 nameservers
+            response.extend(b'\xc0\x0c')  # Name pointer
+            response.extend(b'\x00\x02')  # Type NS
+            response.extend(b'\x00\x01')  # Class IN
+            response.extend(b'\x00\x00\x0e\x10')  # TTL 3600
+            
+            ns_start = len(response)
+            response.extend(b'\x00\x00')  # Placeholder for length
+            for part in ns_name.split('.'):
+                response.append(len(part))
+                response.extend(part.encode('utf-8'))
+            response.append(0)
+            ns_length = len(response) - ns_start - 2
+            response[ns_start:ns_start+2] = struct.pack('>H', ns_length)
         
         return bytes(response)
     
@@ -334,6 +330,24 @@ class SimpleDNSServer:
         
         # Extract the subdomain part
         subdomain = domain_normalized[:-len('.' + config_domain_normalized)]
+        
+        # Handle nameserver hostnames (ns1.domain.com, ns2.domain.com, etc.)
+        nameservers = self.config.get('nameservers', [f"ns1.{self.config['domain']}", f"ns2.{self.config['domain']}"])
+        nameserver_ips = self.config.get('nameserver_ips', [])
+        
+        # Check if this is a nameserver hostname
+        for i, ns_name in enumerate(nameservers):
+            ns_normalized = ns_name.rstrip('.').lower()
+            if domain_normalized == ns_normalized:
+                # Return the corresponding IP address
+                if i < len(nameserver_ips) and self.is_valid_ip(nameserver_ips[i]):
+                    print(f"Nameserver query for {domain} -> {nameserver_ips[i]}")
+                    return self.create_dns_response(data, nameserver_ips[i])
+                else:
+                    # Fallback: try to extract from nameserver hostname pattern
+                    # If nameserver is ns1.domain.com and server IP is known, use it
+                    print(f"Nameserver query for {domain} but no IP configured")
+                    return self.create_error_response(data)
         
         # Convert dashes to dots
         potential_ip = subdomain.replace('-', '.')
