@@ -67,12 +67,13 @@ class SimpleDNSServer:
             while offset < len(data):
                 length = data[offset]
                 if length == 0:
+                    offset += 1  # Skip the null terminator
                     break
                 offset += 1
                 domain_parts.append(data[offset:offset + length].decode('utf-8'))
                 offset += length
             
-            # Get QTYPE (2 bytes)
+            # Get QTYPE (2 bytes) - offset now points after the null terminator
             if offset + 2 > len(data):
                 return None
             qtype = struct.unpack('>H', data[offset:offset+2])[0]
