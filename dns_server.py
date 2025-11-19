@@ -55,8 +55,9 @@ class SimpleDNSServer:
         except ValueError:
             return False
     
-    def parse_dns_query(self, data: bytes) -> Optional[str]:
-        """Parse DNS query and extract the domain name."""
+    def parse_dns_query(self, data: bytes) -> Optional[Tuple[str, int]]:
+        """Parse DNS query and extract the domain name and query type.
+        Returns (domain, qtype) or None if parsing fails."""
         try:
             # Skip DNS header (12 bytes)
             offset = 12
@@ -71,10 +72,14 @@ class SimpleDNSServer:
                 domain_parts.append(data[offset:offset + length].decode('utf-8'))
                 offset += length
             
-            # Skip QTYPE and QCLASS (4 bytes)
-            offset += 4
+            # Get QTYPE (2 bytes)
+            if offset + 2 > len(data):
+                return None
+            qtype = struct.unpack('>H', data[offset:offset+2])[0]
+            offset += 4  # Skip QTYPE and QCLASS
             
-            return '.'.join(domain_parts)
+            domain = '.'.join(domain_parts)
+            return (domain, qtype)
         except (IndexError, UnicodeDecodeError):
             return None
     
@@ -123,6 +128,133 @@ class SimpleDNSServer:
         
         return bytes(response)
     
+    def create_soa_response(self, query_data: bytes) -> bytes:
+        """Create a DNS SOA response."""
+        response = bytearray(query_data[:12])
+        
+        # Set response flags (QR=1, AA=1, RA=1)
+        response[2] = 0x84 | (query_data[2] & 0x01)  # Response, Authoritative, preserve RD
+        response[3] = 0x80  # Recursion available
+        
+        # Set answer count to 1
+        response[6:8] = struct.pack('>H', 1)
+        
+        # Copy the question section
+        question_start = 12
+        question_end = question_start
+        while question_end < len(query_data) and query_data[question_end] != 0:
+            question_end += query_data[question_end] + 1
+        question_end += 5  # Include null terminator and QTYPE/QCLASS
+        
+        response.extend(query_data[question_start:question_end])
+        
+        # Add SOA answer section
+        # Name pointer to question (0xC00C)
+        response.extend(b'\xc0\x0c')
+        
+        # Type SOA (0x0006)
+        response.extend(b'\x00\x06')
+        
+        # Class IN (0x0001)
+        response.extend(b'\x00\x01')
+        
+        # TTL (3600 seconds)
+        response.extend(b'\x00\x00\x0e\x10')
+        
+        # Data length (will calculate)
+        soa_start = len(response)
+        response.extend(b'\x00\x00')  # Placeholder for length
+        
+        # MNAME (primary nameserver)
+        mname = "nsdynspark.911cellular.com"
+        for part in mname.split('.'):
+            response.append(len(part))
+            response.extend(part.encode('utf-8'))
+        response.append(0)  # Null terminator
+        
+        # RNAME (responsible person email - format: hostmaster.domain)
+        # Convert dots to format: hostmaster.911cellular.com -> hostmaster\0911cellular\0com
+        rname = f"hostmaster.{self.config['domain']}"
+        for part in rname.split('.'):
+            response.append(len(part))
+            response.extend(part.encode('utf-8'))
+        response.append(0)  # Null terminator
+        
+        # Serial number (1)
+        response.extend(struct.pack('>I', 1))
+        
+        # Refresh (7200 seconds = 2 hours)
+        response.extend(struct.pack('>I', 7200))
+        
+        # Retry (900 seconds = 15 minutes)
+        response.extend(struct.pack('>I', 900))
+        
+        # Expire (1209600 seconds = 2 weeks)
+        response.extend(struct.pack('>I', 1209600))
+        
+        # Minimum TTL (86400 seconds = 1 day)
+        response.extend(struct.pack('>I', 86400))
+        
+        # Update data length
+        soa_length = len(response) - soa_start - 2
+        response[soa_start:soa_start+2] = struct.pack('>H', soa_length)
+        
+        return bytes(response)
+    
+    def create_ns_response(self, query_data: bytes) -> bytes:
+        """Create a DNS NS response."""
+        response = bytearray(query_data[:12])
+        
+        # Set response flags (QR=1, AA=1, RA=1)
+        response[2] = 0x84 | (query_data[2] & 0x01)  # Response, Authoritative, preserve RD
+        response[3] = 0x80  # Recursion available
+        
+        # Set answer count to 2 (two nameservers)
+        response[6:8] = struct.pack('>H', 2)
+        
+        # Copy the question section
+        question_start = 12
+        question_end = question_start
+        while question_end < len(query_data) and query_data[question_end] != 0:
+            question_end += query_data[question_end] + 1
+        question_end += 5  # Include null terminator and QTYPE/QCLASS
+        
+        response.extend(query_data[question_start:question_end])
+        
+        # Add first NS record
+        response.extend(b'\xc0\x0c')  # Name pointer
+        response.extend(b'\x00\x02')  # Type NS
+        response.extend(b'\x00\x01')  # Class IN
+        response.extend(b'\x00\x00\x0e\x10')  # TTL 3600
+        
+        ns1_name = "nsdynspark.911cellular.com"
+        ns1_start = len(response)
+        response.extend(b'\x00\x00')  # Placeholder for length
+        for part in ns1_name.split('.'):
+            response.append(len(part))
+            response.extend(part.encode('utf-8'))
+        response.append(0)
+        ns1_length = len(response) - ns1_start - 2
+        response[ns1_start:ns1_start+2] = struct.pack('>H', ns1_length)
+        
+        # Add second NS record
+        response.extend(b'\xc0\x0c')  # Name pointer
+        response.extend(b'\x00\x02')  # Type NS
+        response.extend(b'\x00\x01')  # Class IN
+        response.extend(b'\x00\x00\x0e\x10')  # TTL 3600
+        
+        ns2_name = "nsdynspark2.911cellular.com"
+        ns2_start = len(response)
+        response.extend(b'\x00\x00')  # Placeholder for length
+        for part in ns2_name.split('.'):
+            response.append(len(part))
+            response.extend(part.encode('utf-8'))
+        response.append(0)
+        ns2_length = len(response) - ns2_start - 2
+        response[ns2_start:ns2_start+2] = struct.pack('>H', ns2_length)
+        
+        return bytes(response)
+    
     def create_error_response(self, query_data: bytes) -> bytes:
         """Create a DNS error response (NXDOMAIN)."""
         response = bytearray(query_data[:12])
@@ -149,12 +281,30 @@ class SimpleDNSServer:
     
     def handle_query(self, data: bytes, client_addr: Tuple[str, int]) -> bytes:
         """Handle a DNS query and return the appropriate response."""
-        domain = self.parse_dns_query(data)
-        if not domain:
+        parsed = self.parse_dns_query(data)
+        if not parsed:
             return self.create_error_response(data)
+        
+        domain, qtype = parsed
         
         # Check if the domain ends with our configured domain
         if not domain.endswith('.' + self.config['domain']):
+            return self.create_error_response(data)
+        
+        # Handle queries for the root domain
+        if domain == self.config['domain'] or domain == self.config['domain'] + '.':
+            if qtype == 6:  # SOA
+                print(f"SOA query for {domain}")
+                return self.create_soa_response(data)
+            elif qtype == 2:  # NS
+                print(f"NS query for {domain}")
+                return self.create_ns_response(data)
+            else:
+                # For other query types on root domain, return NXDOMAIN
+                return self.create_error_response(data)
+        
+        # Handle subdomain queries (A records only)
+        if qtype != 1:  # Not an A record query
             return self.create_error_response(data)
         
         # Extract the subdomain part
