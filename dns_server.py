@@ -287,16 +287,23 @@ class SimpleDNSServer:
         
         domain, qtype = parsed
         
-        # Normalize domain (remove trailing dot if present for comparison)
-        domain_normalized = domain.rstrip('.')
-        config_domain_normalized = self.config['domain'].rstrip('.')
+        # Normalize domain (remove trailing dot if present, convert to lowercase for comparison)
+        domain_normalized = domain.rstrip('.').lower()
+        config_domain_normalized = self.config['domain'].rstrip('.').lower()
+        
+        # Debug output
+        print(f"Query: domain={domain}, normalized={domain_normalized}, config={config_domain_normalized}, qtype={qtype}")
         
         # Check if the domain matches our configured domain or is a subdomain
-        if domain_normalized != config_domain_normalized and not domain_normalized.endswith('.' + config_domain_normalized):
+        is_root_domain = domain_normalized == config_domain_normalized
+        is_subdomain = domain_normalized.endswith('.' + config_domain_normalized)
+        
+        if not is_root_domain and not is_subdomain:
+            print(f"Domain mismatch: {domain_normalized} does not match {config_domain_normalized}")
             return self.create_error_response(data)
         
         # Handle queries for the root domain
-        if domain_normalized == config_domain_normalized:
+        if is_root_domain:
             if qtype == 6:  # SOA
                 print(f"SOA query for {domain}")
                 return self.create_soa_response(data)
