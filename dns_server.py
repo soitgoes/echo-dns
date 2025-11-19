@@ -287,12 +287,16 @@ class SimpleDNSServer:
         
         domain, qtype = parsed
         
-        # Check if the domain ends with our configured domain
-        if not domain.endswith('.' + self.config['domain']):
+        # Normalize domain (remove trailing dot if present for comparison)
+        domain_normalized = domain.rstrip('.')
+        config_domain_normalized = self.config['domain'].rstrip('.')
+        
+        # Check if the domain matches our configured domain or is a subdomain
+        if domain_normalized != config_domain_normalized and not domain_normalized.endswith('.' + config_domain_normalized):
             return self.create_error_response(data)
         
         # Handle queries for the root domain
-        if domain == self.config['domain'] or domain == self.config['domain'] + '.':
+        if domain_normalized == config_domain_normalized:
             if qtype == 6:  # SOA
                 print(f"SOA query for {domain}")
                 return self.create_soa_response(data)
@@ -308,7 +312,7 @@ class SimpleDNSServer:
             return self.create_error_response(data)
         
         # Extract the subdomain part
-        subdomain = domain[:-len('.' + self.config['domain'])]
+        subdomain = domain_normalized[:-len('.' + config_domain_normalized)]
         
         # Convert dashes to dots
         potential_ip = subdomain.replace('-', '.')
