@@ -284,6 +284,7 @@ class SimpleDNSServer:
         """Handle a DNS query and return the appropriate response."""
         parsed = self.parse_dns_query(data)
         if not parsed:
+            print(f"Failed to parse query from {client_addr}")
             return self.create_error_response(data)
         
         domain, qtype = parsed
@@ -372,10 +373,12 @@ class SimpleDNSServer:
                         readable, _, _ = select.select(sockets, [], [])
                         for sock in readable:
                             data, client_addr = sock.recvfrom(512)
+                            print(f"Received query from {client_addr}, length={len(data)}")
                             response = self.handle_query(data, client_addr)
                             sock.sendto(response, client_addr)
                     else:
                         data, client_addr = ipv4_socket.recvfrom(512)
+                        print(f"Received query from {client_addr}, length={len(data)}")
                         response = self.handle_query(data, client_addr)
                         ipv4_socket.sendto(response, client_addr)
                 except KeyboardInterrupt:
