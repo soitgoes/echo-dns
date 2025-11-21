@@ -26,7 +26,8 @@ class SimpleDNSServer:
             "port": 53,
             "host": "0.0.0.0",
             "nameservers": ["ns1.somedomain.com", "ns2.somedomain.com"],
-            "nameserver_ips": ["127.0.0.1", "127.0.0.1"]  # IP addresses for nameservers
+            "nameserver_ips": ["127.0.0.1", "127.0.0.1"],  # IP addresses for nameservers
+            "cnames": {}  # Static CNAME records: {"subdomain": "target.domain.com"}
         }
         
         if os.path.exists(self.config_file):
@@ -134,6 +135,62 @@ class SimpleDNSServer:
         # IP address
         ip_bytes = socket.inet_aton(ip_address)
         response.extend(ip_bytes)
+        
+        return bytes(response)
+    
+    def create_cname_response(self, query_data: bytes, target: str) -> bytes:
+        """Create a DNS CNAME response."""
+        response = bytearray(query_data[:12])
+        
+        # Set response flags (QR=1, AA=1, RA=1)
+        response[2] = 0x84 | (query_data[2] & 0x01)  # Response, Authoritative, preserve RD
+        response[3] = 0x80  # Recursion available
+        
+        # Set header counts (RFC 1035)
+        response[6:8] = struct.pack('>H', 1)  # ANCOUNT = 1
+        response[8:10] = struct.pack('>H', 0)  # NSCOUNT = 0
+        response[10:12] = struct.pack('>H', 0)  # ARCOUNT = 0
+        
+        # Copy the question section
+        question_start = 12
+        question_end = question_start
+        while question_end < len(query_data) and query_data[question_end] != 0:
+            question_end += query_data[question_end] + 1
+        question_end += 1  # Include null terminator
+        if question_end + 4 > len(query_data):
+            return self.create_error_response(query_data)
+        question_end += 4  # Include QTYPE and QCLASS
+        
+        response.extend(query_data[question_start:question_end])
+        
+        # Add CNAME answer section
+        # Name pointer to question (0xC00C)
+        response.extend(b'\xc0\x0c')
+        
+        # Type CNAME (0x0005)
+        response.extend(b'\x00\x05')
+        
+        # Class IN (0x0001)
+        response.extend(b'\x00\x01')
+        
+        # TTL (300 seconds)
+        response.extend(b'\x00\x00\x01\x2c')
+        
+        # Data length (will calculate)
+        cname_start = len(response)
+        response.extend(b'\x00\x00')  # Placeholder for length
+        
+        # CNAME target (domain name)
+        target_normalized = target.rstrip('.')
+        for part in target_normalized.split('.'):
+            if part:
+                response.append(len(part))
+                response.extend(part.encode('utf-8'))
+        response.append(0)  # Null terminator
+        
+        # Update data length
+        cname_length = len(response) - cname_start - 2
+        response[cname_start:cname_start+2] = struct.pack('>H', cname_length)
         
         return bytes(response)
     
@@ -324,12 +381,30 @@ class SimpleDNSServer:
                 # For other query types on root domain, return NXDOMAIN
                 return self.create_error_response(data)
         
-        # Handle subdomain queries (A records only)
-        if qtype != 1:  # Not an A record query
+        # Handle subdomain queries (A and CNAME records)
+        if qtype != 1 and qtype != 5:  # Not an A or CNAME record query
             return self.create_error_response(data)
         
         # Extract the subdomain part
         subdomain = domain_normalized[:-len('.' + config_domain_normalized)]
+        
+        # Check for static CNAME records first (takes precedence over dynamic IP conversion)
+        cnames = self.config.get('cnames', {})
+        if isinstance(cnames, dict):
+            # Check for exact match (full domain)
+            if domain_normalized in cnames:
+                target = cnames[domain_normalized]
+                print(f"CNAME query for {domain} -> {target}")
+                return self.create_cname_response(data, target)
+            # Check for subdomain match
+            if subdomain in cnames:
+                target = cnames[subdomain]
+                print(f"CNAME query for {domain} -> {target}")
+                return self.create_cname_response(data, target)
+        
+        # If querying for CNAME but no CNAME record exists, return NXDOMAIN
+        if qtype == 5:  # CNAME query but no CNAME record found
+            return self.create_error_response(data)
         
         # Handle nameserver hostnames (ns1.domain.com, ns2.domain.com, etc.)
         nameservers = self.config.get('nameservers', [f"ns1.{self.config['domain']}", f"ns2.{self.config['domain']}"])
@@ -349,7 +424,7 @@ class SimpleDNSServer:
                     print(f"Nameserver query for {domain} but no IP configured")
                     return self.create_error_response(data)
         
-        # Convert dashes to dots
+        # Convert dashes to dots (dynamic IP conversion - lowest priority)
         potential_ip = subdomain.replace('-', '.')
         
         # Validate if it's a valid IP address

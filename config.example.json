@@ -1,0 +1,21 @@
+{
+  "domain": "securityprox.net",
+  "port": 53,
+  "host": "0.0.0.0",
+  "nameservers": [
+    "ns1.securityprox.net",
+    "ns2.securityprox.net"
+  ],
+  "nameserver_ips": [
+    "3.140.49.43",
+    "3.149.78.49"
+  ],
+  "cnames": {
+    "www": "example.com",
+    "mail": "mail.example.com",
+    "api": "api.example.com",
+    "www.securityprox.net": "example.com",
+    "subdomain": "target.domain.com"
+  }
+}
+
